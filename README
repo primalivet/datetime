@@ -4,3 +4,5 @@ OCaml library for date and time manipulation.
 
 At the moment this is a exploratory project, not meant to be consumed in the 
 current state.
+
+See make file for commands to get up and running.
