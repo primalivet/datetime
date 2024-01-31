@@ -289,13 +289,79 @@ let sep_by1 p sep =
 (** Parses zero or more occorences of a parser seperated by a seperator *)
 let sep_by p sep = sep_by1 p sep <|> return []
 
-(** Parse a specific character *)
-let char c = 
+(** Parse a character *)
+let pchar c =
   let label = Printf.sprintf "'%c'" c in
   let pred = Char.equal c in
   satisfy pred label
+;;
 
 (** Parse any of a list of characters *)
 let char_any_of cs =
   let label = Printf.sprintf "char_any_of %s" (String.of_char_list cs) in
-  cs |> List.map ~f:char |> choice <?> label
+  cs |> List.map ~f:pchar |> choice <?> label
+;;
+
+(** Parses a sequence of zero or more characters using a char parser (cp) *)
+let pmany_chars cp =
+  let label = Printf.sprintf "many_chars %s" (get_label cp) in
+  many cp |>> String.of_char_list <?> label
+;;
+
+(** Parses a sequence of one or more characters using a char parser (cp) *)
+let pmany_chars1 cp =
+  let label = Printf.sprintf "many_chars1 %s" (get_label cp) in
+  many1 cp |>> String.of_char_list <?> label
+;;
+
+(** Parses a string *)
+let pstring s =
+  let label = Printf.sprintf "string %s" s in
+  String.to_list s |> List.map ~f:pchar |> sequence |>> String.of_char_list <?> label
+;;
+
+(** Parses a whitespace character *)
+let whitespace =
+  let label = "whitespace" in
+  let pred = Char.is_whitespace in
+  satisfy pred label
+;;
+
+(** Prases zeror or more whitespace charaters *)
+let spaces = many whitespace <?> "spaces"
+
+(** Prases on or more whitespace charaters *)
+let spaces1 = many1 whitespace <?> "spaces1"
+
+(** Parses a digit *)
+let pdigit =
+  let label = "digit" in
+  let pred = Char.is_digit in
+  satisfy pred label
+;;
+
+(** Parses a integer *)
+let pint =
+  let label = "int" in
+  let result_to_int = function
+    | Some _, digits -> -Int.of_string digits
+    | None, digits -> Int.of_string digits
+  in
+  let digits = pmany_chars1 pdigit in
+  optional (pchar '-') @>>@ digits |> map result_to_int <?> label
+;;
+
+(** Parses a float *)
+let pfloat =
+  let label = "float" in
+  let result_to_float (sign_opt, (digits1, (_point, digits2))) =
+    let float = Printf.sprintf "%s.%s" digits1 digits2 |> Float.of_string in
+    match sign_opt with
+    | Some _ -> -.float
+    | None -> float
+  in
+  let digits = pmany_chars1 pdigit in
+  optional (pchar '-') @>>@ digits @>>@ pchar '.' @>>@ digits
+  |> map result_to_float
+  <?> label
+;;
