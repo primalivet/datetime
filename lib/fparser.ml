@@ -1,123 +1,168 @@
 open Base
 
-(** TextInput
-    Represents the input also looked upon as state, to the parser *)
-module TextInput = struct
+module Position = struct
   type t =
-    { lines : string list
-    ; position : position
-    }
-
-  and position =
     { line : int
     ; column : int
     }
 
-  (** Set the intial position of the TextInput or line and column to zero *)
-  let initial_position = { line = 0; column = 0 }
+  let equal pos1 pos2 =
+    let same_line = Int.equal pos1.line pos2.line in
+    let same_column = Int.equal pos1.column pos2.column in
+    same_line && same_column
+  ;;
 
-  (** Increment the position in TextInput by one column *)
+  (** Create a empty intial position of the State or line and column to zero *)
+  let empty = { line = 0; column = 0 }
+
+  (** Increment the position in State by one column *)
   let inc_column pos = { pos with column = pos.column + 1 }
 
-  (** Increment the position in TextInput by one line *)
+  (** Increment the position in State by one line *)
   let inc_line pos = { pos with line = pos.line + 1 }
 
-  (** Retrive the current line from the TextInput *)
-  let current_line input =
-    if input.position.line < List.length input.lines
-    then Some (List.nth_exn input.lines input.position.line)
-    else None
-  ;;
-
-  (** Create a new TextInput from a string *)
-  let from_string s =
-    if String.is_empty s
-    then { lines = []; position = initial_position }
-    else { lines = String.split_lines s; position = initial_position }
-  ;;
-
-  (** Retrive the next character from the TextInput *)
-  let next_char input =
-    let current_line = current_line input in
-    let is_end_of_line =
-      current_line
-      |> Option.map ~f:(fun line -> input.position.line < String.length line)
-      |> Option.value ~default:false
-    in
-    match current_line, is_end_of_line with
-    | None, _ -> input, None
-    | _, true ->
-      let char = '\n' in
-      let new_state = { input with position = inc_line input.position } in
-      new_state, Some char
-    | Some line, false ->
-      let char = line.[input.position.column] in
-      let new_state = { input with position = inc_column input.position } in
-      new_state, Some char
+  let pp fmt pos =
+    let open Stdlib in
+    Format.fprintf fmt "{ line = %d; column = %d }" pos.line pos.column
   ;;
 end
 
-(** Type alias for the TextInput.t *)
-type input = TextInput.t
+(** State
+    Represents the input also looked upon as state, to the parser *)
+module State = struct
+  type t =
+    { lines : string list
+    ; position : Position.t
+    }
 
-(** Represents the label of a parser, used in error messages *)
-type parser_label = string
+  (** Retrive the current line from the State *)
+  let current_line input = List.nth input.lines input.position.line
 
-(** Represents the error of a parser, used in error messages *)
-type parser_error = string
+  let to_position s = s.position
 
-(** Represents the position of a parser, used in error messages *)
-type parser_position =
-  { current_line : string
-  ; line : int
-  ; column : int
-  }
+  (** Create a new State from a string *)
+  let from_string s =
+    if String.is_empty s
+    then { lines = []; position = Position.empty }
+    else { lines = String.split_lines s; position = Position.empty }
+  ;;
 
-(** Represents a result of a parser *)
-type 'a parser_result =
-  | Success of 'a
-  | Failure of (parser_label * parser_error * parser_position)
+  let next_char input : t * char option =
+    let curr_line = current_line input in
+    match curr_line with
+    | Some curr_line ->
+      if input.position.column < String.length curr_line
+      then (
+        let char = curr_line.[input.position.column] in
+        let new_pos = Position.inc_column input.position in
+        let new_state = { input with position = new_pos } in
+        new_state, Some char)
+      else (
+        let next_line =
+          current_line { input with position = Position.inc_line input.position }
+        in
+        match next_line with
+        | Some _ ->
+          let char = '\n' in
+          let new_pos = Position.inc_line input.position in
+          let new_state = { input with position = new_pos } in
+          new_state, Some char
+        | None -> input, None)
+    | None -> input, None
+  ;;
+
+  let equal input1 input2 =
+    let same_lines = List.equal String.equal input1.lines input2.lines in
+    let same_position = Position.equal input1.position input2.position in
+    same_lines && same_position
+  ;;
+
+  let pp fmt input =
+    Stdlib.Format.fprintf
+      fmt
+      "{ lines = %s; position = %a }"
+      (input.lines |> String.concat ~sep:"\n")
+      Position.pp
+      input.position
+  ;;
+end
+
+module Label = struct
+  type t = string
+
+  let equal = String.equal
+  let pp fmt label = Stdlib.Format.fprintf fmt "%s" label
+end
+
+module Reason = struct
+  type t =
+    { message : string
+    ; current_line : string
+    ; position : Position.t
+    }
+
+  let equal reason1 reason2 =
+    String.equal reason1.message reason2.message
+    && String.equal reason1.current_line reason2.current_line
+    && Position.equal reason1.position reason2.position
+  ;;
+
+  let pp fmt reason =
+    Stdlib.Format.fprintf
+      fmt
+      "%s at (%d:%d): %s"
+      reason.message
+      reason.position.line
+      reason.position.column
+      reason.current_line
+  ;;
+end
+
+module ParserResult = struct
+  type 'a t =
+    | Ok of 'a
+    | Error of (Label.t * Reason.t)
+
+  let equal (eqa : 'a -> 'a -> bool) result1 result2 =
+    match result1, result2 with
+    | Ok a1, Ok a2 -> eqa a1 a2
+    | Error (label1, reason1), Error (label2, reason2) ->
+      String.equal label1 label2 && Reason.equal reason1 reason2
+    | _, _ -> false
+  ;;
+
+  (** Print the result of a parser as a string *)
+  let pp ppa fmt result =
+    match result with
+    | Ok (value, _) -> Printf.sprintf "%a" ppa value |> Stdlib.print_endline
+    | Error (label, reason) ->
+      let caret = Printf.sprintf "%*s^%s" reason.position.column "" reason.message in
+      let message =
+        Printf.sprintf
+          "%i:%i Error parsing %s\n%s\n%s"
+          reason.position.line
+          reason.position.column
+          label
+          reason.message
+          caret
+      in
+      Stdlib.Format.fprintf fmt "%s" message
+  ;;
+end
 
 (** Represents a parser *)
-type 'a parser =
-  { fn : input -> ('a * input) parser_result
-  ; label : parser_label
+type 'a t =
+  { fn : State.t -> ('a * State.t) ParserResult.t
+  ; label : Label.t
   }
 
-(** Run a parser on a input (TextInput.t) *)
+(** Run a parser on a input (State.t) *)
 let run_on_input p input = p.fn input
 
 (** Run a parser on a string *)
 let run parser s =
-  let input = TextInput.from_string s in
+  let input = State.from_string s in
   run_on_input parser input
-;;
-
-(** Get a parser_position based of an input (TextInput.t) *)
-let parser_position_from_input input =
-  match TextInput.current_line input with
-  | None ->
-    { current_line = ""; line = input.position.line; column = input.position.column }
-  | Some line ->
-    { current_line = line; line = input.position.line; column = input.position.column }
-;;
-
-(** Print the result of a parser as a string *)
-let print_result ppa result =
-  match result with
-  | Success (value, _) -> Printf.sprintf "%a" ppa value |> Stdlib.print_endline
-  | Failure (label, error, position) ->
-    let caret = Printf.sprintf "%*s^%s" position.column "" error in
-    let message =
-      Printf.sprintf
-        "%i:%i Error parsing %s\n%s\n%s"
-        position.line
-        position.column
-        label
-        error
-        caret
-    in
-    message |> Stdlib.print_endline
 ;;
 
 (** Get the label of a parser *)
@@ -125,11 +170,12 @@ let get_label p = p.label
 
 (** Set the label of a parser *)
 let set_label p new_label =
+  let open ParserResult in
   let new_inner input =
     let result = p.fn input in
     match result with
-    | Success (value, input) -> Success (value, input)
-    | Failure (_, error, position) -> Failure (new_label, error, position)
+    | Ok (value, input) -> Ok (value, input)
+    | Error (_, error) -> Error (new_label, error)
   in
   { fn = new_inner; label = new_label }
 ;;
@@ -139,32 +185,42 @@ let ( <?> ) = set_label
 
 (** Satisfy a predicate on the next character of the input *)
 let satisfy pred label =
+  let open ParserResult in
   let inner input =
-    let remaining_input, char_opt = TextInput.next_char input in
+    let remaining_input, char_opt = State.next_char input in
     match char_opt with
     | None ->
-      let error = "No more input" in
-      let position = parser_position_from_input input in
-      Failure (label, error, position)
+      let reason : Reason.t =
+        { message = "No more input"
+        ; position = State.to_position input
+        ; current_line = State.current_line input |> Option.value ~default:"EOF"
+        }
+      in
+      Error (label, reason)
     | Some char ->
       if pred char
-      then Success (char, remaining_input)
+      then Ok (char, remaining_input)
       else (
-        let err = Printf.sprintf "Unexpected '%c'" char in
-        let position = parser_position_from_input input in
-        Failure (label, err, position))
+        let reason : Reason.t =
+          { message = Printf.sprintf "Unexpected '%c'" char
+          ; position = State.to_position input
+          ; current_line = State.current_line input |> Option.value ~default:"EOF"
+          }
+        in
+        Error (label, reason))
   in
   { fn = inner; label }
 ;;
 
 (** Moniadic bind for parser, used to chain parsers *)
 let bind f p =
+  let open ParserResult in
   let label = "bind unknown" in
   let inner input =
     let result_1 = run_on_input p input in
     match result_1 with
-    | Failure (label, error, position) -> Failure (label, error, position)
-    | Success (value_1, remaining_input) ->
+    | Error (label, reason) -> Error (label, reason)
+    | Ok (value_1, remaining_input) ->
       let parser2 = f value_1 in
       run_on_input parser2 remaining_input
   in
@@ -175,7 +231,8 @@ let bind f p =
 let ( >>= ) p f = bind f p
 
 let return x =
-  let inner input = Success (x, input) in
+  let open ParserResult in
+  let inner input = Ok (x, input) in
   { fn = inner; label = "return unknown" }
 ;;
 
@@ -218,8 +275,8 @@ let or_else p1 p2 =
   let inner input =
     let r1 = run_on_input p1 input in
     match r1 with
-    | Success _ -> r1
-    | Failure _ -> run_on_input p2 input
+    | Ok _ -> r1
+    | Error _ -> run_on_input p2 input
   in
   { fn = inner; label }
 ;;
@@ -243,8 +300,8 @@ let rec sequence ps =
 let rec zero_or_more p input =
   let fst_result = run_on_input p input in
   match fst_result with
-  | Failure _ -> [], input
-  | Success (fst_value, input_after_fst) ->
+  | Error _ -> [], input
+  | Ok (fst_value, input_after_fst) ->
     let subsequent_values, remaining_input = zero_or_more p input_after_fst in
     let values = fst_value :: subsequent_values in
     values, remaining_input
@@ -252,8 +309,9 @@ let rec zero_or_more p input =
 
 (** Matches a parser zero or more times *)
 let many p =
+  let open ParserResult in
   let label = Printf.sprintf "many %s" (get_label p) in
-  let inner input = Success (zero_or_more p input) in
+  let inner input = Ok (zero_or_more p input) in
   { fn = inner; label }
 ;;
 
